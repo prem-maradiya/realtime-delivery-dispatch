@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dispatch Control Room</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root { --bg:#0f1419; --panel:#182028; --text:#e6edf3; --muted:#8b98a5; --line:#2a3540;
+          --avail:#2ea043; --busy:#d29922; --off:#6e7681; --pending:#f85149; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--text);
+         display:grid; grid-template-columns:1fr 340px; height:100vh; }
+  #map { height:100vh; }
+  aside { background:var(--panel); border-left:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
+  header { padding:14px 16px; border-bottom:1px solid var(--line); }
+  h1 { font-size:16px; margin:0 0 4px; }
+  .conn { font-size:12px; color:var(--muted); }
+  .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding:12px 16px; border-bottom:1px solid var(--line); }
+  .stat b { display:block; font-size:22px; font-variant-numeric:tabular-nums; }
+  .stat span { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  #log { flex:1; overflow:auto; padding:8px 16px; font:12px/1.5 ui-monospace, monospace; }
+  #log div { border-bottom:1px solid var(--line); padding:4px 0; color:var(--muted); }
+  #log div b { color:var(--text); font-weight:600; }
+  .legend { padding:10px 16px; border-top:1px solid var(--line); font-size:12px; color:var(--muted); display:flex; gap:12px; flex-wrap:wrap; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:-1px; }
+  @media (max-width: 760px) { body { grid-template-columns:1fr; grid-template-rows:55vh 45vh; } #map { height:55vh; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<aside>
+  <header><h1>Dispatch Control Room</h1><div class="conn" id="conn">connecting…</div></header>
+  <div class="stats">
+    <div class="stat"><b id="s-avail">0</b><span>Available</span></div>
+    <div class="stat"><b id="s-busy">0</b><span>On delivery</span></div>
+    <div class="stat"><b id="s-pending">0</b><span>Waiting</span></div>
+    <div class="stat"><b id="s-active">0</b><span>Active orders</span></div>
+    <div class="stat"><b id="s-done">0</b><span>Delivered</span></div>
+    <div class="stat"><b id="s-events">0</b><span>Events</span></div>
+  </div>
+  <div id="log"></div>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--avail)"></i>available</span>
+    <span><i class="dot" style="background:var(--busy)"></i>busy</span>
+    <span><i class="dot" style="background:var(--off)"></i>offline</span>
+    <span><i class="dot" style="background:var(--pending)"></i>order pickup</span>
+  </div>
+</aside>
+<script>
+const COLORS = { available:'#2ea043', busy:'#d29922', offline:'#6e7681' };
+const map = L.map('map').setView([12.9716, 77.5946], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+
+const drivers = new Map();   // id -> {marker, status}
+const orders = new Map();    // id -> {marker, line, status}
+let eventCount = 0, delivered = 0;
+
+function driverMarker(id, lat, lng, status) {
+  let d = drivers.get(id);
+  if (!d) {
+    const m = L.circleMarker([lat, lng], { radius: 7, weight: 2, color: '#fff', fillOpacity: 1 }).addTo(map)
+      .bindTooltip('Driver ' + id);
+    d = { marker: m, status }; drivers.set(id, d);
+  }
+  if (lat != null) d.marker.setLatLng([lat, lng]);
+  if (status) d.status = status;
+  d.marker.setStyle({ fillColor: COLORS[d.status] || COLORS.offline });
+}
+
+function upsertOrder(o) {
+  let rec = orders.get(o.id);
+  const done = o.status === 'delivered' || o.status === 'cancelled';
+  if (done) {
+    if (rec) { map.removeLayer(rec.marker); if (rec.line) map.removeLayer(rec.line); orders.delete(o.id); }
+    return;
+  }
+  if (!rec) {
+    const m = L.circleMarker([o.pickup_lat, o.pickup_lng], { radius: 5, color: '#f85149', fillOpacity: .9 }).addTo(map)
+      .bindTooltip('Order ' + o.id);
+    rec = { marker: m }; orders.set(o.id, rec);
+  }
+  rec.status = o.status;
+  if (rec.line) map.removeLayer(rec.line);
+  rec.line = L.polyline([[o.pickup_lat, o.pickup_lng], [o.dropoff_lat, o.dropoff_lng]],
+    { color: o.status === 'pending' ? '#f85149' : '#d29922', weight: 2, dashArray: '4 6', opacity: .7 }).addTo(map);
+}
+
+function stats() {
+  const ds = [...drivers.values()], os = [...orders.values()];
+  document.getElementById('s-avail').textContent = ds.filter(d => d.status === 'available').length;
+  document.getElementById('s-busy').textContent = ds.filter(d => d.status === 'busy').length;
+  document.getElementById('s-pending').textContent = os.filter(o => o.status === 'pending').length;
+  document.getElementById('s-active').textContent = os.length;
+  document.getElementById('s-done').textContent = delivered;
+  document.getElementById('s-events').textContent = eventCount;
+}
+
+function log(html) {
+  const el = document.getElementById('log');
+  const row = document.createElement('div');
+  row.innerHTML = new Date().toLocaleTimeString() + ' ' + html;
+  el.prepend(row);
+  while (el.children.length > 200) el.lastChild.remove();
+}
+
+async function loadInitial() {
+  const [ds, os] = await Promise.all([fetch('/drivers').then(r => r.json()), fetch('/orders?limit=500').then(r => r.json())]);
+  ds.forEach(d => { if (d.last_lat != null) driverMarker(d.id, d.last_lat, d.last_lng, d.status); });
+  os.forEach(o => { if (o.status === 'delivered') delivered++; upsertOrder(o); });
+  stats();
+}
+
+function connect() {
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/dispatch');
+  const conn = document.getElementById('conn');
+  ws.onopen = () => conn.textContent = 'live · connected to /ws/dispatch';
+  ws.onclose = () => { conn.textContent = 'disconnected · retrying…'; setTimeout(connect, 2000); };
+  ws.onmessage = (e) => {
+    const ev = JSON.parse(e.data); eventCount++;
+    if (ev.type === 'driver.location') driverMarker(ev.driver_id, ev.lat, ev.lng, ev.status);
+    else if (ev.type === 'driver.status_changed') { if (drivers.has(ev.driver_id)) driverMarker(ev.driver_id, null, null, ev.status); }
+    else if (ev.type === 'order.created') { upsertOrder(ev.order); log(`<b>order ${ev.order.id}</b> created`); }
+    else if (ev.type === 'order.assigned') {
+      upsertOrder(ev.order);
+      if (drivers.has(ev.order.driver_id)) driverMarker(ev.order.driver_id, null, null, 'busy');
+      log(`<b>order ${ev.order.id}</b> → driver ${ev.order.driver_id} (${ev.order.assignment_distance_km} km)`);
+    } else if (ev.type === 'order.status_changed') {
+      if (ev.order.status === 'delivered') delivered++;
+      upsertOrder(ev.order); log(`<b>order ${ev.order.id}</b> ${ev.order.status}`);
+    }
+    stats();
+  };
+}
+loadInitial().then(connect);
+</script>
+</body>
+</html>
