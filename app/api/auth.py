@@ -9,7 +9,7 @@ from app.config import settings
 from app.db import get_session
 from app.models import Customer, Driver
 from app.schemas import CustomerRegister, LoginRequest, TokenOut
-from app.security import create_token, hash_password, verify_password
+from app.security import create_token, hash_password_async, verify_password_async
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -18,7 +18,7 @@ _INVALID = HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
 @router.post("/customers/register", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
 async def register_customer(data: CustomerRegister, session: AsyncSession = Depends(get_session)):
-    customer = Customer(name=data.name, phone=data.phone, password_hash=hash_password(data.password))
+    customer = Customer(name=data.name, phone=data.phone, password_hash=await hash_password_async(data.password))
     session.add(customer)
     try:
         await session.commit()
@@ -42,6 +42,6 @@ async def login(data: LoginRequest, session: AsyncSession = Depends(get_session)
     model = Driver if data.role == "driver" else Customer
     user = (await session.execute(select(model).where(model.phone == data.username))).scalar_one_or_none()
     # Same error for "no such user" and "wrong password" so attackers can't probe phone numbers.
-    if user is None or not verify_password(data.password, user.password_hash):
+    if user is None or not await verify_password_async(data.password, user.password_hash):
         raise _INVALID
     return TokenOut(access_token=create_token(data.role, user.id), role=data.role, id=user.id)

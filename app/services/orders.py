@@ -79,6 +79,6 @@ async def transition(
         await location.set_status(r, freed_driver, "available")
         await events.publish(r, events.DISPATCH_CHANNEL,
                              {"type": "driver.status_changed", "driver_id": freed_driver, "status": "available"})
-        await dispatch_pending(session, r, limit=10)
+        await dispatch_pending(session, r, limit=10, max_assignments=1)
         await session.refresh(order)
     return order

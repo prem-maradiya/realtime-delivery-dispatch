@@ -113,8 +113,13 @@ async def _try_assign(
     return order
 
 
-async def dispatch_pending(session: AsyncSession, r: Redis, limit: int = 50) -> int:
-    """Retry the oldest PENDING orders (FIFO fairness). Returns how many got a driver."""
+async def dispatch_pending(session: AsyncSession, r: Redis, limit: int = 50,
+                           max_assignments: int | None = None) -> int:
+    """Retry the oldest PENDING orders (FIFO fairness). Returns how many got a driver.
+
+    max_assignments: stop early once this many are assigned. When a single driver
+    frees up, they can take at most one order, so callers pass 1.
+    """
     ids = (await session.execute(
         select(Order.id).where(Order.status == OrderStatus.PENDING).order_by(Order.created_at).limit(limit)
     )).scalars().all()
@@ -123,6 +128,8 @@ async def dispatch_pending(session: AsyncSession, r: Redis, limit: int = 50) -> 
         order = await dispatch_order(session, r, oid)
         if order is not None and order.status == OrderStatus.ASSIGNED:
             assigned += 1
+            if max_assignments is not None and assigned >= max_assignments:
+                break
     return assigned
 
 

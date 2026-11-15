@@ -32,7 +32,7 @@ async def change_status(session: AsyncSession, r: Redis, driver_id: int, new_sta
 
     if new_status == DriverStatus.AVAILABLE:
         # A new driver came online: immediately try to serve waiting orders.
-        await dispatch_pending(session, r, limit=10)
+        await dispatch_pending(session, r, limit=10, max_assignments=1)
         await session.refresh(driver)
     return driver
 

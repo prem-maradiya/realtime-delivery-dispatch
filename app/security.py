@@ -5,6 +5,7 @@ Roles:
   driver    can only update their own status/location and their own assigned orders
   customer  can only create, view, track and cancel their own orders
 """
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -38,6 +39,17 @@ def verify_password(password: str, stored: str) -> bool:
         return hmac.compare_digest(digest, base64.b64decode(digest_b64))  # constant-time compare
     except (ValueError, TypeError):
         return False
+
+
+# PBKDF2 is ~0.5 s of CPU by design. Running it directly in an async endpoint would
+# freeze the event loop (and every other request on this worker) for that long.
+# hashlib releases the GIL while hashing, so a worker thread runs it in parallel.
+async def hash_password_async(password: str) -> str:
+    return await asyncio.to_thread(hash_password, password)
+
+
+async def verify_password_async(password: str, stored: str) -> bool:
+    return await asyncio.to_thread(verify_password, password, stored)
 
 
 # ---------- tokens ----------

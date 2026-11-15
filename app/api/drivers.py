@@ -8,7 +8,7 @@ from app.db import get_session
 from app.models import Driver, DriverStatus
 from app.redis_client import get_redis
 from app.schemas import DriverCreate, DriverOut, DriverStatusUpdate, Point
-from app.security import Principal, forbidden, get_principal, hash_password, require_role
+from app.security import Principal, forbidden, get_principal, hash_password_async, require_role
 from app.services import drivers as driver_service
 from app.services import location
 from app.services.errors import Conflict, NotFound
@@ -25,7 +25,7 @@ def _admin_or_self(p: Principal, driver_id: int) -> None:
              dependencies=[Depends(require_role("admin"))])
 async def register_driver(data: DriverCreate, session: AsyncSession = Depends(get_session)):
     """Admin onboards a driver (drivers are vetted, so they don't self-register)."""
-    driver = Driver(name=data.name, phone=data.phone, password_hash=hash_password(data.password),
+    driver = Driver(name=data.name, phone=data.phone, password_hash=await hash_password_async(data.password),
                     status=DriverStatus.OFFLINE)
     session.add(driver)
     try:
