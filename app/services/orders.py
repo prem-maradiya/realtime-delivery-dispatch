@@ -5,16 +5,17 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ALLOWED_TRANSITIONS, Driver, DriverStatus, Order, OrderEvent, OrderStatus, utcnow
+from app.models import ALLOWED_TRANSITIONS, Customer, Driver, DriverStatus, Order, OrderEvent, OrderStatus, utcnow
 from app.schemas import OrderCreate, OrderOut
 from app.services import events, location
 from app.services.dispatch import dispatch_order, dispatch_pending
 from app.services.errors import Conflict, NotFound
 
 
-async def create_order(session: AsyncSession, r: Redis, data: OrderCreate) -> Order:
+async def create_order(session: AsyncSession, r: Redis, data: OrderCreate, customer: Customer) -> Order:
     order = Order(
-        customer_name=data.customer_name,
+        customer_id=customer.id,
+        customer_name=customer.name,
         pickup_lat=data.pickup.lat, pickup_lng=data.pickup.lng,
         dropoff_lat=data.dropoff.lat, dropoff_lng=data.dropoff.lng,
         status=OrderStatus.PENDING,

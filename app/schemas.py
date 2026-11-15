@@ -12,10 +12,31 @@ class Point(BaseModel):
     lng: float = Field(ge=-180, le=180)
 
 
+# ---------- Auth ----------
+class CustomerRegister(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    phone: str = Field(min_length=5, max_length=20)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    role: Literal["admin", "driver", "customer"]
+    username: str = Field(description="phone number for drivers/customers, admin username for admin")
+    password: str
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    role: str
+    id: int | None
+
+
 # ---------- Drivers ----------
 class DriverCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     phone: str = Field(min_length=5, max_length=20)
+    password: str = Field(min_length=8, max_length=128)
 
 
 class DriverOut(BaseModel):
@@ -37,7 +58,6 @@ class DriverStatusUpdate(BaseModel):
 
 # ---------- Orders ----------
 class OrderCreate(BaseModel):
-    customer_name: str = Field(min_length=1, max_length=100)
     pickup: Point
     dropoff: Point
 
@@ -46,6 +66,7 @@ class OrderOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    customer_id: int
     customer_name: str
     pickup_lat: float
     pickup_lng: float

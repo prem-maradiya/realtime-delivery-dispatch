@@ -19,6 +19,16 @@ class Settings(BaseSettings):
     # How often to persist a driver's live location from Redis into Postgres.
     location_persist_interval_s: float = 30.0
 
+    # --- Auth ---
+    # Override JWT_SECRET and ADMIN_PASSWORD in any real deployment.
+    jwt_secret: str = "dev-only-change-me-0123456789abcdef"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 12 * 60
+    admin_username: str = "admin"
+    admin_password: str = "admin12345"
+    # PBKDF2 work factor (OWASP 2023 recommends 600k for SHA-256). Tests lower it for speed.
+    password_hash_iterations: int = 600_000
+
     # Background job that retries PENDING orders.
     enable_sweeper: bool = True
     sweeper_interval_s: float = 5.0

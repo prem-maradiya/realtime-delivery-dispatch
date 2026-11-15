@@ -48,6 +48,7 @@ class Driver(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
     phone: Mapped[str] = mapped_column(String(20), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
     status: Mapped[DriverStatus] = mapped_column(_enum(DriverStatus), default=DriverStatus.OFFLINE, index=True)
     # Last known location, persisted periodically from Redis (not on every ping).
     last_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -55,10 +56,21 @@ class Driver(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class Customer(Base):
+    __tablename__ = "customers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    phone: Mapped[str] = mapped_column(String(20), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Order(Base):
     __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
     customer_name: Mapped[str] = mapped_column(String(100))
     pickup_lat: Mapped[float] = mapped_column(Float)
     pickup_lng: Mapped[float] = mapped_column(Float)

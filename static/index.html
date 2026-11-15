@@ -25,10 +25,25 @@
   #log div b { color:var(--text); font-weight:600; }
   .legend { padding:10px 16px; border-top:1px solid var(--line); font-size:12px; color:var(--muted); display:flex; gap:12px; flex-wrap:wrap; }
   .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:-1px; }
+  #login { position:fixed; inset:0; background:rgba(15,20,25,.92); display:none; place-items:center; z-index:1000; }
+  #login form { background:var(--panel); border:1px solid var(--line); padding:24px; border-radius:8px; width:min(320px, calc(100vw - 32px)); display:grid; gap:10px; }
+  #login h2 { margin:0 0 4px; font-size:16px; }
+  #login input, #login button { font:inherit; padding:8px 10px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--text); }
+  #login button { background:#238636; border-color:#2ea043; cursor:pointer; }
+  #login .err { color:var(--pending); font-size:12px; min-height:1em; }
   @media (max-width: 760px) { body { grid-template-columns:1fr; grid-template-rows:55vh 45vh; } #map { height:55vh; } }
 </style>
 </head>
 <body>
+<div id="login">
+  <form id="login-form">
+    <h2>Operations login</h2>
+    <input id="u" placeholder="Admin username" autocomplete="username" required>
+    <input id="pw" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+    <div class="err" id="login-err"></div>
+  </form>
+</div>
 <div id="map"></div>
 <aside>
   <header><h1>Dispatch Control Room</h1><div class="conn" id="conn">connecting…</div></header>
@@ -105,15 +120,43 @@ function log(html) {
   while (el.children.length > 200) el.lastChild.remove();
 }
 
+// ---- auth: admin JWT kept in sessionStorage (cleared when the tab closes) ----
+let token = null;
+try { token = sessionStorage.getItem('dispatch_token'); } catch (e) {}
+
+function showLogin(msg) {
+  document.getElementById('login').style.display = 'grid';
+  document.getElementById('login-err').textContent = msg || '';
+}
+
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const r = await fetch('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role: 'admin', username: document.getElementById('u').value,
+                           password: document.getElementById('pw').value }) });
+  if (!r.ok) { showLogin('Invalid credentials'); return; }
+  token = (await r.json()).access_token;
+  try { sessionStorage.setItem('dispatch_token', token); } catch (e) {}
+  document.getElementById('login').style.display = 'none';
+  start();
+});
+
+async function api(path) {
+  const r = await fetch(path, { headers: { Authorization: 'Bearer ' + token } });
+  if (r.status === 401) { throw new Error('unauthorized'); }
+  return r.json();
+}
+
 async function loadInitial() {
-  const [ds, os] = await Promise.all([fetch('/drivers').then(r => r.json()), fetch('/orders?limit=500').then(r => r.json())]);
+  const [ds, os] = await Promise.all([api('/drivers'), api('/orders?limit=500')]);
   ds.forEach(d => { if (d.last_lat != null) driverMarker(d.id, d.last_lat, d.last_lng, d.status); });
   os.forEach(o => { if (o.status === 'delivered') delivered++; upsertOrder(o); });
   stats();
 }
 
 function connect() {
-  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/dispatch');
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host
+    + '/ws/dispatch?token=' + encodeURIComponent(token));
   const conn = document.getElementById('conn');
   ws.onopen = () => conn.textContent = 'live · connected to /ws/dispatch';
   ws.onclose = () => { conn.textContent = 'disconnected · retrying…'; setTimeout(connect, 2000); };
@@ -133,7 +176,10 @@ function connect() {
     stats();
   };
 }
-loadInitial().then(connect);
+function start() {
+  loadInitial().then(connect).catch(() => showLogin('Session expired, sign in again'));
+}
+if (token) start(); else showLogin();
 </script>
 </body>
 </html>

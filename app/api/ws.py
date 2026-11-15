@@ -3,20 +3,25 @@
 /ws/drivers/{id}   driver app: SENDS location pings, RECEIVES assignments
 /ws/orders/{id}    customer:   RECEIVES order status + live driver location
 /ws/dispatch       ops dashboard: RECEIVES every event
+
+Auth: pass the JWT as ?token=... (browsers can't set headers on a WebSocket).
+Close codes: 4401 = missing/invalid token, 4403 = not allowed, 4404 = not found.
 """
 import json
 import logging
 import time
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from app.config import settings
 from app.db import SessionLocal
+from app.api.orders import can_view
 from app.models import Driver, Order
 from app.realtime import manager
 from app.redis_client import get_redis
 from app.schemas import LocationMessage, OrderOut
+from app.security import Principal, decode_token
 from app.services import events, location
 from app.services.drivers import persist_location
 
@@ -24,8 +29,21 @@ router = APIRouter(tags=["websockets"])
 log = logging.getLogger(__name__)
 
 
+async def _authenticate(ws: WebSocket, token: str | None) -> Principal | None:
+    try:
+        return decode_token(token or "")
+    except ValueError:
+        await ws.close(code=4401)
+        return None
+
+
 @router.websocket("/ws/drivers/{driver_id}")
-async def driver_socket(ws: WebSocket, driver_id: int):
+async def driver_socket(ws: WebSocket, driver_id: int, token: str | None = Query(default=None)):
+    if (p := await _authenticate(ws, token)) is None:
+        return
+    if not p.is_driver(driver_id):
+        await ws.close(code=4403)
+        return
     r = get_redis()
     async with SessionLocal() as session:
         driver = await session.get(Driver, driver_id)
@@ -64,11 +82,13 @@ async def driver_socket(ws: WebSocket, driver_id: int):
 
 
 @router.websocket("/ws/orders/{order_id}")
-async def order_socket(ws: WebSocket, order_id: int):
+async def order_socket(ws: WebSocket, order_id: int, token: str | None = Query(default=None)):
+    if (p := await _authenticate(ws, token)) is None:
+        return
     r = get_redis()
     async with SessionLocal() as session:
         order = await session.get(Order, order_id)
-    if order is None:
+    if order is None or not can_view(p, order):
         await ws.close(code=4404)
         return
 
@@ -90,7 +110,12 @@ async def order_socket(ws: WebSocket, order_id: int):
 
 
 @router.websocket("/ws/dispatch")
-async def dispatch_socket(ws: WebSocket):
+async def dispatch_socket(ws: WebSocket, token: str | None = Query(default=None)):
+    if (p := await _authenticate(ws, token)) is None:
+        return
+    if p.role != "admin":
+        await ws.close(code=4403)
+        return
     await ws.accept()
     manager.connect(events.DISPATCH_CHANNEL, ws)
     try:

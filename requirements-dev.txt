@@ -6,3 +6,4 @@ aiosqlite==0.20.0
 fakeredis==2.26.2
 lupa==2.2
 websockets==14.1
+locust==2.32.4

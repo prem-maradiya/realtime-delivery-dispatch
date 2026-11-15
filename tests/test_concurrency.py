@@ -6,7 +6,7 @@ import fakeredis
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import Driver, DriverStatus, Order, OrderStatus
+from app.models import Customer, Driver, DriverStatus, Order, OrderStatus
 from app.services import location
 from app.services.dispatch import dispatch_order
 from tests.conftest import reset_db
@@ -17,9 +17,10 @@ async def test_race_one_driver_many_orders():
     r = fakeredis.FakeAsyncRedis(server=fakeredis.FakeServer(), decode_responses=True)
 
     async with SessionLocal() as s:
-        s.add(Driver(id=1, name="Solo", phone="+911", status=DriverStatus.AVAILABLE))
+        s.add(Customer(id=1, name="c", phone="+910", password_hash="x"))
+        s.add(Driver(id=1, name="Solo", phone="+911", password_hash="x", status=DriverStatus.AVAILABLE))
         for i in range(10):
-            s.add(Order(customer_name=f"c{i}", pickup_lat=12.97, pickup_lng=77.59,
+            s.add(Order(customer_id=1, customer_name=f"c{i}", pickup_lat=12.97, pickup_lng=77.59,
                         dropoff_lat=12.95, dropoff_lng=77.60, status=OrderStatus.PENDING))
         await s.commit()
     await location.set_status(r, 1, "available")

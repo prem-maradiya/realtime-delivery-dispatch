@@ -2,51 +2,50 @@
 from tests.conftest import NEAR, make_driver, make_order
 
 
-def test_customer_sees_assignment_and_live_driver_location(client):
-    order = make_order(client)  # pending: no drivers yet
-    with client.websocket_connect(f"/ws/orders/{order['id']}") as customer:
-        snap = customer.receive_json()
+def test_customer_sees_assignment_and_live_driver_location(client, admin, customer):
+    order = make_order(client, customer)  # pending: no drivers yet
+    with client.websocket_connect(f"/ws/orders/{order['id']}?token={customer.token}") as cust_ws:
+        snap = cust_ws.receive_json()
         assert snap["type"] == "snapshot" and snap["order"]["status"] == "pending"
 
-        did = make_driver(client, *NEAR)  # comes online -> order dispatched
-        msgs = [customer.receive_json()]
+        driver = make_driver(client, admin, *NEAR)  # comes online -> order dispatched
+        msgs = [cust_ws.receive_json()]
         while msgs[-1]["type"] != "order.assigned":
-            msgs.append(customer.receive_json())
-        assert msgs[-1]["order"]["driver_id"] == did
+            msgs.append(cust_ws.receive_json())
+        assert msgs[-1]["order"]["driver_id"] == driver.id
 
         # Driver moves: the customer tracking the order receives it
-        with client.websocket_connect(f"/ws/drivers/{did}") as driver:
-            assert driver.receive_json()["type"] == "connected"
-            driver.send_json({"type": "location", "lat": 12.975, "lng": 77.5946})
-            ev = customer.receive_json()
+        with client.websocket_connect(f"/ws/drivers/{driver.id}?token={driver.token}") as drv_ws:
+            assert drv_ws.receive_json()["type"] == "connected"
+            drv_ws.send_json({"type": "location", "lat": 12.975, "lng": 77.5946})
+            ev = cust_ws.receive_json()
             assert ev["type"] == "driver.location" and ev["lat"] == 12.975
 
 
-def test_driver_receives_assignment_over_websocket(client):
-    did = make_driver(client, *NEAR)
-    with client.websocket_connect(f"/ws/drivers/{did}") as driver:
-        assert driver.receive_json()["type"] == "connected"
-        order = make_order(client)
-        ev = driver.receive_json()
+def test_driver_receives_assignment_over_websocket(client, admin, customer):
+    driver = make_driver(client, admin, *NEAR)
+    with client.websocket_connect(f"/ws/drivers/{driver.id}?token={driver.token}") as ws:
+        assert ws.receive_json()["type"] == "connected"
+        order = make_order(client, customer)
+        ev = ws.receive_json()
         assert ev["type"] == "order.assigned" and ev["order"]["id"] == order["id"]
 
 
-def test_dashboard_receives_all_events(client):
-    with client.websocket_connect("/ws/dispatch") as dash:
-        did = make_driver(client, *NEAR)
-        make_order(client)
+def test_dashboard_receives_all_events(client, admin, customer):
+    with client.websocket_connect(f"/ws/dispatch?token={admin.token}") as dash:
+        make_driver(client, admin, *NEAR)
+        make_order(client, customer)
         types = set()
         while "order.assigned" not in types:
             types.add(dash.receive_json()["type"])
         assert {"driver.location", "driver.status_changed", "order.created", "order.assigned"} <= types
-        assert did
 
 
-def test_driver_socket_rejects_bad_messages(client):
-    did = make_driver(client, *NEAR)
-    with client.websocket_connect(f"/ws/drivers/{did}") as driver:
-        driver.receive_json()
-        driver.send_text("not json")
-        assert driver.receive_json()["type"] == "error"
-        driver.send_json({"type": "location", "lat": 999, "lng": 0})
-        assert driver.receive_json()["type"] == "error"
+def test_driver_socket_rejects_bad_messages(client, admin):
+    driver = make_driver(client, admin, *NEAR)
+    with client.websocket_connect(f"/ws/drivers/{driver.id}?token={driver.token}") as ws:
+        ws.receive_json()
+        ws.send_text("not json")
+        assert ws.receive_json()["type"] == "error"
+        ws.send_json({"type": "location", "lat": 999, "lng": 0})
+        assert ws.receive_json()["type"] == "error"

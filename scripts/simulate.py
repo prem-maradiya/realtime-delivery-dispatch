@@ -1,12 +1,13 @@
 """Traffic simulator: fake drivers drive around, customers place orders.
 
 Usage:  python scripts/simulate.py --drivers 10 --order-every 3 --duration 120
-Then open http://localhost:8000 to watch the dashboard.
+Then open http://localhost:8000 (log in as the admin) to watch the dashboard.
 """
 import argparse
 import asyncio
 import json
 import math
+import os
 import random
 
 import httpx
@@ -38,16 +39,29 @@ async def drive(ws, pos, target):
         await asyncio.sleep(TICK_S)
 
 
-async def run_driver(base, http, idx, stop):
-    tag = random.randint(10000, 99999)
-    d = (await http.post("/drivers", json={"name": f"Driver {idx}", "phone": f"+91{tag}{idx:04d}"})).json()
-    did, pos = d["id"], near_center()
-    ws_url = base.replace("http", "ws", 1) + f"/ws/drivers/{did}"
+PASSWORD = "sim-password-1"
+
+
+async def login(http, role, username, password):
+    r = await http.post("/auth/login", json={"role": role, "username": username, "password": password})
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+
+async def run_driver(base, http, admin_headers, idx, stop):
+    phone = f"+91{random.randint(10000, 99999)}{idx:04d}"
+    d = await http.post("/drivers", json={"name": f"Driver {idx}", "phone": phone, "password": PASSWORD},
+                        headers=admin_headers)
+    d.raise_for_status()
+    did, pos = d.json()["id"], near_center()
+    token = await login(http, "driver", phone, PASSWORD)
+    auth = {"Authorization": f"Bearer {token}"}
+    ws_url = base.replace("http", "ws", 1) + f"/ws/drivers/{did}?token={token}"
     jobs: asyncio.Queue = asyncio.Queue()
 
     async with websockets.connect(ws_url) as ws:
         await ws.send(json.dumps({"type": "location", "lat": pos[0], "lng": pos[1]}))
-        await http.post(f"/drivers/{did}/status", json={"status": "available"})
+        await http.post(f"/drivers/{did}/status", json={"status": "available"}, headers=auth)
 
         async def reader():
             async for raw in ws:
@@ -69,20 +83,23 @@ async def run_driver(base, http, idx, stop):
                 oid = order["id"]
                 print(f"driver {did}: heading to pickup for order {oid}")
                 pos = await drive(ws, pos, (order["pickup_lat"], order["pickup_lng"]))
-                await http.post(f"/orders/{oid}/pickup", params={"driver_id": did})
+                await http.post(f"/orders/{oid}/pickup", headers=auth)
                 pos = await drive(ws, pos, (order["dropoff_lat"], order["dropoff_lng"]))
-                await http.post(f"/orders/{oid}/deliver", params={"driver_id": did})
+                await http.post(f"/orders/{oid}/deliver", headers=auth)
                 print(f"driver {did}: delivered order {oid}")
         finally:
             reader_task.cancel()
 
 
 async def run_customers(http, every, stop):
-    n = 0
+    customers = []
+    for i in range(5):
+        r = await http.post("/auth/customers/register", json={
+            "name": f"Customer {i}", "phone": f"+92{random.randint(100000, 999999)}{i}", "password": PASSWORD})
+        r.raise_for_status()
+        customers.append({"Authorization": f"Bearer {r.json()['access_token']}"})
     while not stop.is_set():
-        n += 1
-        o = (await http.post("/orders", json={
-            "customer_name": f"Customer {n}",
+        o = (await http.post("/orders", headers=random.choice(customers), json={
             "pickup": dict(zip(("lat", "lng"), near_center())),
             "dropoff": dict(zip(("lat", "lng"), near_center(0.04))),
         })).json()
@@ -96,11 +113,14 @@ async def main():
     p.add_argument("--drivers", type=int, default=8)
     p.add_argument("--order-every", type=float, default=3.0)
     p.add_argument("--duration", type=float, default=120)
+    p.add_argument("--admin-user", default=os.environ.get("ADMIN_USERNAME", "admin"))
+    p.add_argument("--admin-password", default=os.environ.get("ADMIN_PASSWORD", "admin12345"))
     a = p.parse_args()
 
     stop = asyncio.Event()
     async with httpx.AsyncClient(base_url=a.base, timeout=10) as http:
-        tasks = [asyncio.create_task(run_driver(a.base, http, i, stop)) for i in range(a.drivers)]
+        admin_headers = {"Authorization": f"Bearer {await login(http, 'admin', a.admin_user, a.admin_password)}"}
+        tasks = [asyncio.create_task(run_driver(a.base, http, admin_headers, i, stop)) for i in range(a.drivers)]
         tasks.append(asyncio.create_task(run_customers(http, a.order_every, stop)))
         await asyncio.sleep(a.duration)
         stop.set()
