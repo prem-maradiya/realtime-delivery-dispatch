@@ -7,7 +7,7 @@ WORKDIR /app
 
 # Install dependencies first so this layer is cached between code changes
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --default-timeout=120 --retries 10 -r requirements.txt
 
 COPY app ./app
 COPY static ./static
