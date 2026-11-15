@@ -159,7 +159,10 @@ function connect() {
     + '/ws/dispatch?token=' + encodeURIComponent(token));
   const conn = document.getElementById('conn');
   ws.onopen = () => conn.textContent = 'live · connected to /ws/dispatch';
-  ws.onclose = () => { conn.textContent = 'disconnected · retrying…'; setTimeout(connect, 2000); };
+  ws.onclose = (e) => {
+    if (e.code === 4401 || e.code === 4403) { showLogin('Session expired, sign in again'); return; }
+    conn.textContent = 'disconnected · retrying…'; setTimeout(connect, 2000);
+  };
   ws.onmessage = (e) => {
     const ev = JSON.parse(e.data); eventCount++;
     if (ev.type === 'driver.location') driverMarker(ev.driver_id, ev.lat, ev.lng, ev.status);

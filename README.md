@@ -15,6 +15,9 @@ live status + driver location to customers, drivers and an ops dashboard.
 - **Horizontally scalable**: stateless API replicas behind Nginx, events fanned out via Redis Pub/Sub
 - **Order state machine** with an append-only audit trail
 - **Resilience**: driver heartbeats, background retry of pending orders, health checks
+- **Security**: JWT authentication with admin / driver / customer roles; every endpoint and WebSocket is access-controlled
+- **Schema migrations** with Alembic, applied by a one-shot service before the API starts
+- **CI** on every push: test suite + Docker image build
 
 ## Architecture
 
@@ -47,6 +50,21 @@ correctness, even if Redis state is stale.
 `events:*` in Redis and forwards messages to its own connected sockets, so an event raised on
 any replica reaches clients connected to any other replica.
 
+**Authentication and access control.** `POST /auth/login` returns a signed JWT (HS256)
+carrying the user's role and id. Passwords are hashed with PBKDF2-SHA256 and a per-user salt.
+
+| Role | Can do |
+|---|---|
+| `admin` | onboard drivers, list all drivers and orders, cancel any order, open the ops dashboard |
+| `driver` | update own status and location, pick up and deliver orders assigned to them |
+| `customer` | self-register, create orders, view, track and cancel their own orders |
+
+A driver's identity always comes from the token, never from request parameters. Other users'
+orders return `404` rather than `403`, so order ids can't be probed. WebSockets authenticate
+with `?token=` (browsers can't set headers on a WebSocket) and close with `4401`, `4403` or `4404`.
+Because query strings can appear in proxy and access logs, a production deployment would
+issue a short-lived, single-use ticket for the WebSocket handshake instead of the main token.
+
 **Order lifecycle.**
 
 ```
@@ -65,11 +83,14 @@ app/
   models.py          SQLAlchemy models + state machine
   schemas.py         Pydantic request/response models
   realtime.py        WebSocket manager + Redis Pub/Sub listener
+  security.py        password hashing, JWT, role checks
   api/               REST and WebSocket routes
   services/          dispatch engine, locations, locks, order and driver logic
-tests/               dispatch, lifecycle, WebSocket and concurrency tests
+migrations/          Alembic schema migrations
+tests/               dispatch, lifecycle, auth, WebSocket, concurrency and migration tests
 static/index.html    live map dashboard
 scripts/simulate.py  traffic simulator
+loadtest/            Locust load test
 ```
 
 ## Run it (Docker)
@@ -78,9 +99,12 @@ scripts/simulate.py  traffic simulator
 docker compose up --build
 ```
 
-- Dashboard (live map): http://localhost:8000
-- API docs (Swagger):  http://localhost:8000/docs
+- Dashboard (live map): http://localhost:8000 (sign in with the admin account)
+- API docs (Swagger):  http://localhost:8000/docs (use **Authorize** with a token from `/auth/login`)
 - Health:              http://localhost:8000/health
+
+The default admin login is `admin` / `admin12345` for local development only. For anything
+shared, copy `.env.example` to `.env` and set `JWT_SECRET` and `ADMIN_PASSWORD`.
 
 Run 3 API replicas behind Nginx (proves the Pub/Sub fan-out works across instances):
 
@@ -104,28 +128,40 @@ pytest -v
 
 ## API
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/drivers` | Register driver |
-| GET | `/drivers` | List drivers (with live Redis location) |
-| POST | `/drivers/{id}/status` | Go `available` / `offline` |
-| POST | `/drivers/{id}/location` | REST location ping (fallback) |
-| POST | `/orders` | Create order → auto-dispatch |
-| GET | `/orders?status=` | List orders |
-| GET | `/orders/{id}` | Order detail |
-| GET | `/orders/{id}/events` | Audit trail |
-| POST | `/orders/{id}/pickup?driver_id=` | Driver picked up |
-| POST | `/orders/{id}/deliver?driver_id=` | Driver delivered |
-| POST | `/orders/{id}/cancel` | Cancel |
-| WS | `/ws/drivers/{id}` | Driver: send location, receive assignments |
-| WS | `/ws/orders/{id}` | Customer: live order tracking |
-| WS | `/ws/dispatch` | Ops dashboard: every event |
-| GET | `/health` | Postgres + Redis health |
+| Method | Path | Who | Purpose |
+|---|---|---|---|
+| POST | `/auth/customers/register` | public | Customer sign-up, returns token |
+| POST | `/auth/login` | public | Get a JWT for any role |
+| POST | `/drivers` | admin | Onboard driver |
+| GET | `/drivers` | admin | List drivers (with live Redis location) |
+| GET | `/drivers/{id}` | admin, self | Driver detail |
+| POST | `/drivers/{id}/status` | admin, self | Go `available` / `offline` |
+| POST | `/drivers/{id}/location` | self | REST location ping (fallback) |
+| POST | `/orders` | customer | Create order → auto-dispatch |
+| GET | `/orders?status=` | any | List orders (scoped to the caller) |
+| GET | `/orders/{id}` | owner, assigned driver, admin | Order detail |
+| GET | `/orders/{id}/events` | owner, assigned driver, admin | Audit trail |
+| POST | `/orders/{id}/pickup` | assigned driver | Picked up |
+| POST | `/orders/{id}/deliver` | assigned driver | Delivered |
+| POST | `/orders/{id}/cancel` | owner, admin | Cancel |
+| WS | `/ws/drivers/{id}?token=` | self | Send location, receive assignments |
+| WS | `/ws/orders/{id}?token=` | owner, assigned driver, admin | Live order tracking |
+| WS | `/ws/dispatch?token=` | admin | Every event |
+| GET | `/health` | public | Postgres + Redis health |
+
+## Database migrations
+
+```bash
+alembic upgrade head                              # apply
+alembic revision --autogenerate -m "add column"   # create after changing models
+```
+
+In Docker, the `migrate` service runs `alembic upgrade head` once, and the API replicas start
+only after it succeeds.
 
 ## Roadmap
 
-- JWT authentication for drivers and customers
-- Alembic migrations
+- Driver accept/reject with timeout-based reassignment
+- Refresh tokens and token revocation
 - Road-network ETA instead of straight-line distance; batch matching
-- Reassignment when a driver doesn't pick up within a time limit
 - Prometheus metrics (dispatch latency, pending queue depth)
