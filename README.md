@@ -1,5 +1,7 @@
 # Real-Time Delivery Dispatch System
 
+[![CI](https://github.com/prem-maradiya/realtime-delivery-dispatch/actions/workflows/ci.yml/badge.svg)](https://github.com/prem-maradiya/realtime-delivery-dispatch/actions/workflows/ci.yml)
+
 Matches delivery orders to the **nearest available driver** in milliseconds and streams
 live status + driver location to customers, drivers and an ops dashboard.
 
