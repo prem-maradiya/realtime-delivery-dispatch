@@ -149,6 +149,40 @@ pytest -v
 | WS | `/ws/dispatch?token=` | admin | Every event |
 | GET | `/health` | public | Postgres + Redis health |
 
+## Load testing
+
+`loadtest/locustfile.py` simulates drivers (GPS ping every 1–2 s, picking up and delivering
+assigned orders) and customers (placing orders and checking their status). The headline
+endpoint is `POST /orders`, which runs the full nearest-driver search, lock and transactional
+assignment inside the request.
+
+```bash
+locust -f loadtest/locustfile.py --host http://localhost:8000     --headless -u 20 -r 1 -t 3m --reset-stats --csv loadtest/results/run
+```
+
+**Issues found by load testing (fixed):**
+- PBKDF2 password hashing (~0.5 s of CPU by design) ran on the event loop, stalling every
+  request on that worker during each login. It now runs in a worker thread.
+- When a driver became free, the system tried to dispatch up to 10 waiting orders inside the
+  request, although one driver can take only one. It now stops after the first assignment.
+
+**Results** on a development laptop: Windows 11, 12 logical CPUs, 2 API worker processes,
+PostgreSQL and Redis in Docker Desktop, load generator on the same machine. 20 concurrent
+users for 3 minutes, 1,639 requests, **0 errors**.
+
+| Endpoint | p50 | p95 | p99 |
+|---|---|---|---|
+| `POST /orders` (create + dispatch) | 200 ms | 640 ms | 1.0 s |
+| `POST /drivers/{id}/location` | 72 ms | 260 ms | 570 ms |
+| `POST /orders/{id}/pickup` | 79 ms | 270 ms | 660 ms |
+| `POST /orders/{id}/deliver` | 320 ms | 1.4 s | 2.3 s |
+| `GET /orders` | 50 ms | 200 ms | 600 ms |
+
+These numbers are bounded by the environment rather than the design: in this setup a request
+to an empty route takes ~13 ms and each Redis or PostgreSQL round trip ~5 ms (Docker Desktop
+VM networking), against well under 1 ms on a Linux host. At 100 users the laptop saturated,
+with multi-second latencies and ~2% connection resets. Raw results are in `loadtest/results/`.
+
 ## Database migrations
 
 ```bash
@@ -161,6 +195,8 @@ only after it succeeds.
 
 ## Roadmap
 
+- Benchmark on Linux infrastructure (e.g. a CI job with service containers)
+- Move post-delivery re-dispatch to a background task to cut `deliver` latency
 - Driver accept/reject with timeout-based reassignment
 - Refresh tokens and token revocation
 - Road-network ETA instead of straight-line distance; batch matching
