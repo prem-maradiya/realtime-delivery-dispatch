@@ -21,15 +21,29 @@ services:
       timeout: 3s
       retries: 20
 
+  # One-shot job: apply database migrations, then exit.
+  # Runs once, so scaled API replicas never race each other on schema changes.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dispatch:dispatch@postgres:5432/dispatch
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # Stateless API. Scale it with: docker compose up --scale api=3
   api:
     build: .
     environment:
       DATABASE_URL: postgresql+asyncpg://dispatch:dispatch@postgres:5432/dispatch
       REDIS_URL: redis://redis:6379/0
+      # Set these in a .env file next to docker-compose.yml for anything beyond local use
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-0123456789abcdef}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: on-failure

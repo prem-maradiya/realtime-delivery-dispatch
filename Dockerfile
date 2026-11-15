@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY static ./static
+COPY migrations ./migrations
+COPY alembic.ini .
 
 # Run as a non-root user
 RUN useradd --create-home appuser
